@@ -1,0 +1,195 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Instantly deploy IPSec VPN server with mitmproxy",
+
+  "Parameters" : {
+    "KeyName": {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair."
+    },
+
+    "InstanceType" : {
+      "Description" : "WebServer EC2 instance type",
+      "Type" : "String",
+      "Default" : "m1.small",
+      "AllowedValues" : [ "t1.micro", "m1.small", "m1.medium", "m1.large"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+
+    "VPNSecret" : {
+      "Description" : "This will be your VPN SECRET. Please change this.",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "32",
+      "Default": "ipsec.secrets.key",
+      "ConstraintDescription": "Input this value under SECRET column of your iOS VPN setting. Type is IPSec(CISCO)"
+   },
+    "VPNUser" : {
+      "Description" : "This will be your VPN ACCOUNT. Please change this.",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "32",
+      "Default": "ipsec.secrets.vpnuser",
+      "ConstraintDescription": "Input this value under ACCOUNT column of your iOS VPN setting. Type is IPSec(CISCO)"
+   },
+    "VPNPassword" : {
+      "Description" : "This will be your VPN PASSWORD. Please change this.",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "32",
+      "Default": "ipsec.secrets.vpnuser.password",
+      "ConstraintDescription": "Input this value under PASSWORD column of your iOS VPN setting. Type is IPSec(CISCO)"
+   },
+    "SSHLocation" : {
+      "Description" : "Your PC IP address here. The IP address range that can be used to SSH to the EC2 instances",
+      "Type": "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default": "0.0.0.0/0",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+   }
+  },
+
+  "Mappings" : {
+    "AWSInstanceType2Arch" : {
+      "t1.micro"    : { "Arch" : "PV64" },
+      "m1.small"    : { "Arch" : "PV64" },
+      "m1.medium"   : { "Arch" : "PV64" },
+      "m1.large"    : { "Arch" : "PV64" }
+    },
+    "AWSRegionArch2AMI" : {
+      "us-west-1"        : {"PV64" : "ami-01f60f45"},
+      "ap-northeast-1"   : {"PV64" : "ami-4478fc44"}
+    }
+
+  },
+
+  "Resources" : {
+    "EC2Instance" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "SecurityGroups" : [ { "Ref" : "InstanceSecurityGroup" } ],
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
+                          { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
+        "UserData" : { "Fn::Base64" : { "Fn::Join" : [ "", [
+                "#!/bin/bash",
+                "\n", "apt-get -y install strongswan strongswan-plugin-xauth-generic mitmproxy",
+                "\n", "echo `ifconfig eth0 | grep 'inet addr' | cut -d: -f2 | cut -d' ' -f1` '%any : PSK \"", {"Ref" : "VPNSecret"} , "\"' > /etc/ipsec.secrets",
+                "\n", "echo >> /etc/ipsec.secrets",
+                "\n", "echo '\"", {"Ref" : "VPNUser"}, "\" : XAUTH \"", {"Ref" : "VPNPassword"}, "\"' >> /etc/ipsec.secrets",
+                "\n", "",
+                "\n", "cat > /etc/ipsec.conf <<EOF",
+                "\n", "config setup",
+                "\n", "    cachecrls=yes",
+                "\n", "    uniqueids=yes",
+                "\n", "",
+                "\n", "conn ios",
+                "\n", "    keyexchange=ikev1",
+                "\n", "    authby=xauthpsk",
+                "\n", "    xauth=server",
+                "\n", "    left=%defaultroute",
+                "\n", "    leftsubnet=0.0.0.0/0",
+                "\n", "    leftfirewall=yes",
+                "\n", "    right=%any",
+                "\n", "    rightsubnet=192.168.111.0/24",
+                "\n", "    rightsourceip=192.168.111.2/24",
+                "\n", "    rightdns=8.8.8.8",
+                "\n", "    auto=add",
+                "\n", "EOF",
+                "\n", "",
+                "\n", "service strongswan restart",
+                "\n", "",
+                "\n", "echo net.ipv4.ip_forward=1 >> /etc/sysctl.conf",
+                "\n", "sysctl -p",
+                "\n", "",
+                "\n", "/sbin/iptables -t nat -A POSTROUTING -s 192.168.111.0/24 -o eth0 -j MASQUERADE",
+                "\n", "/sbin/iptables -t nat -A PREROUTING -i eth0 -p tcp -j REDIRECT --dport 80:65535 --to-port 8080",
+                "\n", "",
+                "\n", "nohup mitmdump -T -w /tmp/dump &",
+                "\n", "",
+                "\n", "",
+                "\n", ""
+        ] ] }}
+      }
+    },
+
+    "InstanceSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable SSH and IPSec VPN",
+        "SecurityGroupIngress" : [ {
+            "IpProtocol" : "tcp",
+            "FromPort" : "22",
+            "ToPort" : "22",
+            "CidrIp" : { "Ref" : "SSHLocation"}
+        },
+        {
+            "IpProtocol" : "udp",
+            "FromPort" : "500",
+            "ToPort" : "500",
+            "CidrIp" : "0.0.0.0/0"
+        },
+        {
+            "IpProtocol" : "udp",
+            "FromPort" : "1701",
+            "ToPort" : "1701",
+            "CidrIp" : "0.0.0.0/0"
+        },
+        {
+            "IpProtocol" : "udp",
+            "FromPort" : "4500",
+            "ToPort" : "4500",
+            "CidrIp" : "0.0.0.0/0"
+        } ]
+      }
+    }
+  },
+
+  "Outputs" : {
+    "InstanceId" : {
+      "Description" : "InstanceId of the newly created EC2 instance",
+      "Value" : { "Ref" : "EC2Instance" }
+    },
+    "AZ" : {
+      "Description" : "Availability Zone of the newly created EC2 instance",
+      "Value" : { "Fn::GetAtt" : [ "EC2Instance", "AvailabilityZone" ] }
+    },
+    "PublicDNS" : {
+      "Description" : "Public DNSName of the newly created EC2 instance",
+      "Value" : { "Fn::GetAtt" : [ "EC2Instance", "PublicDnsName" ] }
+    },
+    "PublicIP" : {
+      "Description" : "Public IP address of the newly created EC2 instance",
+      "Value" : { "Fn::GetAtt" : [ "EC2Instance", "PublicIp" ] }
+    },
+    "IPSecAccount" : {
+      "Description" : "iPhone IPSec(CISCO) Account",
+      "Value" : { "Ref" : "VPNUser" }
+    },
+    "IPSecPassword" : {
+      "Description" : "iPhone IPSec(CISCO) Password",
+      "Value" : { "Ref" : "VPNPassword" }
+    },
+    "IPSecSecret" : {
+      "Description" : "iPhone IPSec(CISCO) Secret",
+      "Value" : { "Ref" : "VPNSecret" }
+    },
+    "Usage1" : {
+      "Value" : "Wait 2-3 min after CREATE_COMPLETE",
+      "Description" : "Then browse mitm.it first to install fake SSL CA Cert"
+    },
+    "Usage2" : {
+      "Value" : "Decrypted transactions will available /tmp/dump",
+      "Description" : "Alternatively, you can get mitmproxy UI by SSH to the server, killall mitmdump, mitmproxy -T."
+    },
+    "Usage3" : {
+      "Description" : "Happy hacking",
+      "Value" : "GLHF"
+    }
+  }
+}
