@@ -61,8 +61,8 @@
       "m1.large"    : { "Arch" : "PV64" }
     },
     "AWSRegionArch2AMI" : {
-      "us-west-1"        : {"PV64" : "ami-01f60f45"},
-      "ap-northeast-1"   : {"PV64" : "ami-4478fc44"}
+      "us-west-1"        : {"PV64" : "ami-c24939a2"},
+      "ap-northeast-1"   : {"PV64" : "ami-70ccce1e"}
     }
 
   },
@@ -78,6 +78,7 @@
                           { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
         "UserData" : { "Fn::Base64" : { "Fn::Join" : [ "", [
                 "#!/bin/bash",
+                "\n", "apt-get -y update",
                 "\n", "apt-get -y install strongswan strongswan-plugin-xauth-generic mitmproxy",
                 "\n", "echo `ifconfig eth0 | grep 'inet addr' | cut -d: -f2 | cut -d' ' -f1` '%any : PSK \"", {"Ref" : "VPNSecret"} , "\"' > /etc/ipsec.secrets",
                 "\n", "echo >> /etc/ipsec.secrets",
@@ -108,7 +109,7 @@
                 "\n", "sysctl -p",
                 "\n", "",
                 "\n", "/sbin/iptables -t nat -A POSTROUTING -s 192.168.111.0/24 -o eth0 -j MASQUERADE",
-                "\n", "/sbin/iptables -t nat -A PREROUTING -i eth0 -p tcp -j REDIRECT --dport 80:65535 --to-port 8080",
+                "\n", "iptables -t nat -A PREROUTING -i eth0 -p tcp -j REDIRECT --dport 80:65535 --to-port 8080",
                 "\n", "",
                 "\n", "nohup mitmdump -T -w /tmp/dump &",
                 "\n", "",
